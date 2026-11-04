@@ -1,0 +1,91 @@
+name: Compilar driver PowerVR BXM-8-256
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Descargar este repositorio
+        uses: actions/checkout@v4
+
+      - name: Descomprimir el kit
+        run: |
+          ls -la
+          unzip -q mesa-pvr-bxm-8-256-*.zip -d /tmp/kit
+          cp -a /tmp/kit/*/. .
+          ls -la
+
+      - name: Instalar dependencias del sistema
+        run: |
+          sudo apt-get update
+          for p in build-essential bison flex pkg-config git unzip wget python3-pip \
+                   glslang-tools spirv-tools spirv-headers \
+                   llvm-18-dev libclang-18-dev libclang-cpp18-dev libclc-18-dev libllvmspirvlib-18-dev \
+                   libdrm-dev libexpat1-dev zlib1g-dev libzstd-dev \
+                   gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu; do
+            sudo apt-get install -y --no-install-recommends "$p" || echo "::warning::No se pudo instalar $p"
+          done
+          python3 -m pip install --user --break-system-packages meson ninja mako pyyaml ply packaging setuptools
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Instalar Android NDK r27c
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q android-ndk-r27c-linux.zip -d "$HOME"
+          echo "ANDROID_NDK_ROOT=$HOME/android-ndk-r27c" >> "$GITHUB_ENV"
+
+      - name: Clonar Mesa y aplicar los 5 parches
+        run: ./tools/setup_mesa.sh
+
+      - name: Test offline del puente DDK 25.1 (simulado)
+        run: |
+          gcc -Wall -Wextra -Werror -O2 tests/test_bridge_v25_mock.c -o tests/test_bridge_v25_mock
+          ./tests/test_bridge_v25_mock
+
+      - name: Compilar herramientas nativas de Mesa (host x86_64)
+        run: |
+          mkdir -p tools/native-bin
+          meson setup research/mesa-src/build-native research/mesa-src \
+            -Dbuildtype=release \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers=imagination \
+            -Dplatforms= \
+            -Degl=disabled \
+            -Dgbm=disabled \
+            -Dtools=imagination \
+            -Dmesa-clc=enabled \
+            -Dprecomp-compiler=enabled
+          ninja -C research/mesa-src/build-native \
+            src/compiler/clc/mesa_clc \
+            src/compiler/spirv/vtn_bindgen2 \
+            src/imagination/pco/uscgen/pco_clc \
+            src/imagination/pdsc/pdsc_precomp
+          cp research/mesa-src/build-native/src/compiler/clc/mesa_clc tools/native-bin/
+          cp research/mesa-src/build-native/src/compiler/spirv/vtn_bindgen2 tools/native-bin/
+          cp research/mesa-src/build-native/src/imagination/pco/uscgen/pco_clc tools/native-bin/
+          cp research/mesa-src/build-native/src/imagination/pdsc/pdsc_precomp tools/native-bin/
+          chmod +x tools/native-bin/*
+
+      - name: Compilar el driver para Android (aarch64) y empaquetar
+        env:
+          PKG_CONFIG_LIBDIR: /nonexistent
+        run: ./tools/build_driver.sh
+
+      - name: Guardar resultado y logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bxm8256-driver
+          if-no-files-found: warn
+          path: |
+            dist/*.zip
+            dist/standalone_icd/
+            BASE_COMMIT.txt
+            research/mesa-src/build-android/meson-logs/meson-log.txt
+            research/mesa-src/build-native/meson-logs/meson-log.txt
