@@ -20,7 +20,10 @@ jobs:
           unzip -q mesa-pvr-bxm-8-256-*.zip -d /tmp/kit
           cp -a /tmp/kit/*/. .
           ls -la
-
+      - name: Parche - enlazar libc++ de forma estática
+        run: |
+          sed -i "s|^\[host_machine\]|[built-in options]\nc_link_args = ['-static-libstdc++']\ncpp_link_args = ['-static-libstdc++']\n\n[host_machine]|" tools/generate_cross_file.py
+          grep -c "static-libstdc++" tools/generate_cross_file.py
       - name: Instalar dependencias del sistema
         run: |
           sudo apt-get update
